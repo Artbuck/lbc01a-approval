@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-JzN93S+5+SDtjZT2LU8N5XikFhbaqaw80CLVFa8Zep4='; style-src 'sha256-bYQqN8Q/r3XP8QWLoCUNdnVZhO05uPDxjPOxFbZ2xK4='; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-Z+H27bm0IVwnZB505UMpbfNNe2kL7GrzhED9g7cjsrw='; style-src 'sha256-/Izb63huQRHmkrBvpfPD2Nj80I4eODl26KhFXYpfA/Y='; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ART-TID Owner Approval</title>
@@ -9,13 +9,15 @@ h1{font-size:20px}table{border-collapse:collapse;width:100%}td{border-top:1px so
 td:first-child{width:36%;color:#555}button{font-size:16px;padding:10px 16px;margin:12px 8px 0 0}#status{margin-top:12px;font-weight:600}
 textarea{width:100%;height:220px;font:12px ui-monospace,monospace}.warn{background:#fff4d6;padding:8px;border-radius:6px}
 @media (prefers-color-scheme: dark){body{background:#111;color:#eee}td{border-color:#333}td:first-child{color:#aaa}.warn{background:#3a3000}}
+#sum{font-weight:700;font-size:16px;margin:8px 0}
 </style></head>
 <body>
-<h1 id="h">ART-TID Owner approval (probe P3)</h1>
-<p class="warn">LB-C01A feasibility probe. Nothing here can publish anything. This page has no server, loads nothing from other sites, and sends nothing anywhere.</p>
+<h1 id="h">ART-TID Owner approval</h1>
+<p class="warn">Approving signs exactly the statement below with your passkey. Lane B can publish only content that matches this signature, once, before it expires. Nothing is published from this page. It has no server, loads nothing from other sites and sends nothing anywhere except back to the Lane B window that opened it.</p>
 <p>Page origin: <code id="env"></code></p>
+<div id="sum"></div>
 <table id="t"></table>
-<p>Approval ID = SHA-256 of the statement above (this is the passkey challenge): <code id="aid"></code></p>
+<p>Approval ID (SHA-256 of the statement, the passkey challenge): <code id="aid"></code></p>
 <button id="go">Approve with passkey</button>
 <div id="status"></div>
 <div id="outwrap" hidden><textarea id="out" readonly></textarea><button id="copy">Copy JSON</button></div>
@@ -35,7 +37,7 @@ function fail(msg){ $('status').textContent = 'REFUSED: ' + msg; $('go').disable
 $('copy').addEventListener('click', () => { $('out').select(); navigator.clipboard.writeText($('out').value).then(() => $('copy').textContent = 'Copied'); });
 $('env').textContent = location.origin;
 if (mode === 'register') {
-  $('h').textContent = 'Register Owner passkey (probe P3)';
+  $('h').textContent = 'Register Owner passkey';
   $('go').textContent = 'Create passkey';
   $('go').addEventListener('click', async () => {
     try {
@@ -46,11 +48,11 @@ if (mode === 'register') {
         pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
         authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' }, attestation: 'none', timeout: 180000 } });
       const ad = new Uint8Array(cred.response.getAuthenticatorData());
-      show({ probe: 'LB-C01A-P3-REGISTER', origin: location.origin, rp_id: location.hostname, credential_id: cred.id,
+      show({ probe: 'ARTTID-LB-APPROVAL-REGISTER', origin: location.origin, rp_id: location.hostname, credential_id: cred.id,
              spki_b64url: b64u.enc(cred.response.getPublicKey()), alg: cred.response.getPublicKeyAlgorithm(),
              flags: { UP: !!(ad[32] & 1), UV: !!(ad[32] & 4), BE: !!(ad[32] & 8), BS: !!(ad[32] & 16) },
              authenticator_attachment: cred.authenticatorAttachment || null, user_agent: navigator.userAgent });
-      $('status').textContent = 'Passkey created. Copy the JSON below and paste it to Claude. It contains only the PUBLIC key.';
+      $('status').textContent = 'Passkey created. Copy the JSON below for the Owner key-registration record. It contains only the PUBLIC key.';
     } catch (e) { $('status').textContent = 'Error: ' + e.name + ': ' + e.message; }
   });
 } else {
@@ -61,6 +63,7 @@ if (mode === 'register') {
     if (canon(st) !== text) throw Error('statement is not canonical');
     if (st.environment.origin !== location.origin || st.environment.rp_id !== location.hostname) throw Error('statement is bound to ' + st.environment.origin + ', not this page');
     if (Date.now() >= Date.parse(st.expires_at)) throw Error('statement expired at ' + st.expires_at);
+    $('sum').textContent = st.platform + ' · account ' + st.account.id + ' (' + st.account.display_name + ') · ' + (st.controlled_test ? 'CONTROLLED TEST' : 'LIVE APPROVAL') + ' · expires ' + st.expires_at;
     for (const [k, v] of flat(st, '', [])) { const tr = $('t').insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = v; }
     crypto.subtle.digest('SHA-256', raw).then(d => {
       const challenge = new Uint8Array(d); $('aid').textContent = b64u.enc(challenge);
@@ -68,9 +71,9 @@ if (mode === 'register') {
         try {
           const a = await navigator.credentials.get({ publicKey: { challenge, rpId: location.hostname,
             allowCredentials: [{ type: 'public-key', id: b64u.dec(st.approver.credential_id) }], userVerification: 'required', timeout: 180000 } });
-          show({ probe: 'LB-C01A-P3-SIGN', approval_id: b64u.enc(challenge), nonce: st.nonce, assertion: { credential_id: a.id,
+          show({ probe: 'ARTTID-LB-APPROVAL-SIGN', approval_id: b64u.enc(challenge), nonce: st.nonce, assertion: { credential_id: a.id,
             client_data_json: b64u.enc(a.response.clientDataJSON), authenticator_data: b64u.enc(a.response.authenticatorData), signature: b64u.enc(a.response.signature) } });
-          $('status').textContent = 'Signed. Copy the JSON below and paste it to Claude.';
+          $('status').textContent = window.opener ? 'Signed and sent to Lane B. If the Lane B dialog does not confirm, copy the JSON below and paste it there.' : 'Signed. Copy the JSON below and paste it into the Lane B approval dialog.';
         } catch (e) { $('status').textContent = 'Error: ' + e.name + ': ' + e.message; }
       });
     });

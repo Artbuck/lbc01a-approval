@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-JzN93S+5+SDtjZT2LU8N5XikFhbaqaw80CLVFa8Zep4='; style-src 'sha256-bYQqN8Q/r3XP8QWLoCUNdnVZhO05uPDxjPOxFbZ2xK4='; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ART-TID Owner Approval</title>
+<style>body{font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0 auto;padding:16px;max-width:760px;background:#fff;color:#111}
+h1{font-size:20px}table{border-collapse:collapse;width:100%}td{border-top:1px solid #ddd;padding:6px;vertical-align:top;word-break:break-all}
+td:first-child{width:36%;color:#555}button{font-size:16px;padding:10px 16px;margin:12px 8px 0 0}#status{margin-top:12px;font-weight:600}
+textarea{width:100%;height:220px;font:12px ui-monospace,monospace}.warn{background:#fff4d6;padding:8px;border-radius:6px}
+@media (prefers-color-scheme: dark){body{background:#111;color:#eee}td{border-color:#333}td:first-child{color:#aaa}.warn{background:#3a3000}}
+</style></head>
+<body>
+<h1 id="h">ART-TID Owner approval (probe P3)</h1>
+<p class="warn">LB-C01A feasibility probe. Nothing here can publish anything. This page has no server, loads nothing from other sites, and sends nothing anywhere.</p>
+<p>Page origin: <code id="env"></code></p>
+<table id="t"></table>
+<p>Approval ID = SHA-256 of the statement above (this is the passkey challenge): <code id="aid"></code></p>
+<button id="go">Approve with passkey</button>
+<div id="status"></div>
+<div id="outwrap" hidden><textarea id="out" readonly></textarea><button id="copy">Copy JSON</button></div>
+<script>"use strict";
+const b64u = { enc: b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''),
+               dec: s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/') + '==='.slice((s.length+3)%4)), c => c.charCodeAt(0)) };
+function canon(v){ if(v===null)return'null'; if(typeof v==='boolean')return v?'true':'false';
+  if(typeof v==='number'){ if(!Number.isSafeInteger(v)) throw Error('non-integer number'); return String(v);} if(typeof v==='string')return JSON.stringify(v);
+  if(Array.isArray(v))return'['+v.map(canon).join(',')+']'; return'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}'; }
+function flat(o,p,rows){ for(const k of Object.keys(o).sort()){ const v=o[k], key=p?p+'.'+k:k;
+  if(v&&typeof v==='object'&&!Array.isArray(v)) flat(v,key,rows); else rows.push([key, Array.isArray(v)?JSON.stringify(v):String(v)]); } return rows; }
+const $ = id => document.getElementById(id);
+const mode = new URLSearchParams(location.search).get('mode') || 'sign';
+function show(obj){ const t = JSON.stringify(obj, null, 1); $('out').value = t; $('outwrap').hidden = false; window.__result = obj;
+  if (window.opener) { try { window.opener.postMessage({ lbApproval: obj }, '*'); } catch (e) {} } }
+function fail(msg){ $('status').textContent = 'REFUSED: ' + msg; $('go').disabled = true; }
+$('copy').addEventListener('click', () => { $('out').select(); navigator.clipboard.writeText($('out').value).then(() => $('copy').textContent = 'Copied'); });
+$('env').textContent = location.origin;
+if (mode === 'register') {
+  $('h').textContent = 'Register Owner passkey (probe P3)';
+  $('go').textContent = 'Create passkey';
+  $('go').addEventListener('click', async () => {
+    try {
+      const cred = await navigator.credentials.create({ publicKey: {
+        rp: { id: location.hostname, name: 'ART-TID Lane B Approvals' },
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'arttid-owner', displayName: 'ART-TID Owner' },
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+        authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' }, attestation: 'none', timeout: 180000 } });
+      const ad = new Uint8Array(cred.response.getAuthenticatorData());
+      show({ probe: 'LB-C01A-P3-REGISTER', origin: location.origin, rp_id: location.hostname, credential_id: cred.id,
+             spki_b64url: b64u.enc(cred.response.getPublicKey()), alg: cred.response.getPublicKeyAlgorithm(),
+             flags: { UP: !!(ad[32] & 1), UV: !!(ad[32] & 4), BE: !!(ad[32] & 8), BS: !!(ad[32] & 16) },
+             authenticator_attachment: cred.authenticatorAttachment || null, user_agent: navigator.userAgent });
+      $('status').textContent = 'Passkey created. Copy the JSON below and paste it to Claude. It contains only the PUBLIC key.';
+    } catch (e) { $('status').textContent = 'Error: ' + e.name + ': ' + e.message; }
+  });
+} else {
+  try {
+    const raw = b64u.dec(location.hash.slice(1));
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    const st = JSON.parse(text);
+    if (canon(st) !== text) throw Error('statement is not canonical');
+    if (st.environment.origin !== location.origin || st.environment.rp_id !== location.hostname) throw Error('statement is bound to ' + st.environment.origin + ', not this page');
+    if (Date.now() >= Date.parse(st.expires_at)) throw Error('statement expired at ' + st.expires_at);
+    for (const [k, v] of flat(st, '', [])) { const tr = $('t').insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = v; }
+    crypto.subtle.digest('SHA-256', raw).then(d => {
+      const challenge = new Uint8Array(d); $('aid').textContent = b64u.enc(challenge);
+      $('go').addEventListener('click', async () => {
+        try {
+          const a = await navigator.credentials.get({ publicKey: { challenge, rpId: location.hostname,
+            allowCredentials: [{ type: 'public-key', id: b64u.dec(st.approver.credential_id) }], userVerification: 'required', timeout: 180000 } });
+          show({ probe: 'LB-C01A-P3-SIGN', approval_id: b64u.enc(challenge), nonce: st.nonce, assertion: { credential_id: a.id,
+            client_data_json: b64u.enc(a.response.clientDataJSON), authenticator_data: b64u.enc(a.response.authenticatorData), signature: b64u.enc(a.response.signature) } });
+          $('status').textContent = 'Signed. Copy the JSON below and paste it to Claude.';
+        } catch (e) { $('status').textContent = 'Error: ' + e.name + ': ' + e.message; }
+      });
+    });
+  } catch (e) { fail(e.message); }
+}
+</script>
+</body></html>
